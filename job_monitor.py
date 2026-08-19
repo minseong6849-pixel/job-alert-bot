@@ -15,7 +15,7 @@
 
 import json
 import os
-import sys
+import time
 from pathlib import Path
 
 import requests
@@ -44,34 +44,67 @@ HEADERS = {
 # ---------------------------------------------------------------------------
 
 def fetch_shinhan_securities():
-    """신한투자증권 채용공고 목록"""
+    """신한투자증권 채용공고 목록 (정적 HTML -> requests로 충분)"""
     url = "https://recruit.shinhansec.com/recruit/list.do"
     resp = requests.get(url, headers=HEADERS, timeout=10)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
     jobs = []
-    # 채용공고 목록은 <a> 태그들로 구성되어 있고, 텍스트 안에 마감일(D-N 또는 "마감")이 포함됨
     for a in soup.select("a"):
         text = a.get_text(strip=True)
         if not text:
             continue
-        # 채용공고 항목만 필터링: 마감일 표시가 포함된 것들
         if ("D-" in text or "마감" in text) and ("경력" in text or "신입" in text or "인턴" in text or "기타" in text):
             jobs.append({"title": text, "url": url})
 
     return jobs
 
 
-# 여기에 다른 회사 크롤러를 추가할 수 있음
-# 예: fetch_hantu_securities(), fetch_mirae_asset() 등
-# 한국투자증권(recruit.truefriend.com)은 Vue.js로 렌더링되어
-# requests만으로는 목록을 가져올 수 없음 -> Selenium/Playwright 필요
-# 미래에셋증권은 채용 사이트가 robots.txt로 자동 접근을 차단하고 있어 제외함
+def fetch_hantu_securities():
+    """한국투자증권 채용공고 목록 (Vue.js 렌더링 -> Selenium으로 브라우저 렌더링 후 파싱)"""
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.common.by import By
+
+    url = "https://recruit.truefriend.com/announcementList"
+
+    options = Options()
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument(f"user-agent={HEADERS['User-Agent']}")
+
+    driver = webdriver.Chrome(options=options)
+    jobs = []
+    try:
+        driver.get(url)
+        # Vue가 데이터를 채울 시간을 줌
+        time.sleep(3)
+
+        # 공고 카드/행 요소를 찾음 (사이트 구조가 바뀌면 이 선택자도 바뀔 수 있음)
+        elements = driver.find_elements(By.CSS_SELECTOR, "li, tr, .anno-item, [class*='anno']")
+        for el in elements:
+            text = el.text.strip()
+            if not text:
+                continue
+            # 채용공고 항목으로 보이는 텍스트만 필터링 (마감일/D-day 패턴 포함)
+            if ("D-" in text or "마감" in text) and len(text) < 200:
+                # 같은 텍스트가 여러 컨테이너에서 중복으로 잡히는 걸 방지
+                if not any(text in j["title"] or j["title"] in text for j in jobs):
+                    jobs.append({"title": text.replace("\n", " "), "url": url})
+    finally:
+        driver.quit()
+
+    return jobs
+
+
+# 미래에셋증권은 robots.txt로 자동 접근을 차단하고 있어 크롤링 대상에서 제외함
 
 
 COMPANIES = {
     "신한투자증권": fetch_shinhan_securities,
+    "한국투자증권": fetch_hantu_securities,
 }
 
 
